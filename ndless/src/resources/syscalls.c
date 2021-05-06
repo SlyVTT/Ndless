@@ -30,16 +30,22 @@
 
 /* Ndless extensions exposed as syscalls. See os.h for documentation. */
 
-/* Values is an array of values for non-CAS 3.1, CAS 3.1, non-CAS CX 3.1, CAS CX 3.1, CM-C 3.1, CAS CM-C 3.1,
+/* Values is an array of values for
+ * non-CAS 3.1, CAS 3.1, non-CAS CX 3.1, CAS CX 3.1, CM-C 3.1, CAS CM-C 3.1,
  * non-CAS 3.6, CAS 3.6, non-CAS CX 3.6, CAS CX 3.6,
- *   non-CAS 3.9.0, CAS 3.9.0, non-CAS CX 3.9.0, CAS CX 3.9.0,
- *   non-CAS 3.9.1, CAS 3.9.1, non-CAS CX 3.9.1, CAS CX 3.9.1,
- *   non-CAS CX 4.0.0, CAS CX 4.0.0,
- *   non-CAS CX 4.0.3 and CAS CX 4.0.3,
- *   non-CAS CX 4.2.0 and CAS CX 4.2.0,
- *   non-CAS CX 4.3.0.702 and CAS CX 4.3.0.702,
- *   non-CAS CX 4.4.0.532 and CAS CX 4.4.0.532,
- *   non-CAS CX 4.5.0.1180 and CAS CX 4.5.0.1180 */
+ * non-CAS 3.9.0, CAS 3.9.0, non-CAS CX 3.9.0, CAS CX 3.9.0,
+ * non-CAS 3.9.1, CAS 3.9.1, non-CAS CX 3.9.1, CAS CX 3.9.1,
+ * non-CAS CX 4.0.0, CAS CX 4.0.0,
+ * non-CAS CX 4.0.3 and CAS CX 4.0.3,
+ * non-CAS CX 4.2.0 and CAS CX 4.2.0,
+ * non-CAS CX 4.3.0.702 and CAS CX 4.3.0.702,
+ * non-CAS CX 4.4.0.532 and CAS CX 4.4.0.532,
+ * non-CAS CX 4.5.0.1180 and CAS CX 4.5.0.1180,
+ * non-CAS CX 4.5.1.12 and CAS CX 4.5.1.12,
+ * non-CAS CX 4.5.3.14 and CAS CX 4.5.3.14,
+ * non-CAS CX II 5.2.0.771, non-CAS CX II-T 5.2.0.771, CAS CX II 5.2.0.771,
+ * non-CAS CX 4.5.4.48 and CAS CX 4.5.4.48, 
+ * non-CAS CX II 5.3.0.564, non-CAS CX II-T 5.3.0.564, CAS CX II 5.3.0.564 */
 int sc_nl_osvalue(const int *values, unsigned size) {
     unsigned index = ut_os_version_index;
     if (index >= size)
@@ -83,7 +89,18 @@ unsigned sc_nl_osid(void) {
     return ut_os_version_index;
 }
 
+BOOL nl_is_cx2(void) {
+    static uint32_t model_id = 0;
+    if(model_id == 0)
+        model_id = *(volatile uint32_t*)0x900A0000;
+
+    return model_id == 0x202;
+}
+
 unsigned sc_nl_hwsubtype(void) {
+    if(nl_is_cx2())
+        return 2; // 2 if CX II
+
     unsigned asic_user_flags_model = (*(volatile unsigned*)0x900A002C & 0x7C000000) >> 26;
     return (/* CM */ asic_user_flags_model == 2 || /* CM CAS */ asic_user_flags_model == 3); // 1 if CM
 }
@@ -285,3 +302,120 @@ unsigned sc_ext_table[] = {
     (unsigned)ins_loaded_by_3rd_party_loader, (unsigned)sc_nl_hwsubtype, (unsigned)sc_nl_exec, (unsigned)sc_nl_osid,
     (unsigned)sc_nl_hassyscall, (unsigned)sc_nl_lcd_blit, (unsigned)sc_nl_lcd_type, (unsigned)sc_nl_lcd_init
 };
+
+/* On the CX II, touchpad_read/_write have to be wrapped to preserve compatibility:
+ * - The return value is inverted (now 0 indicates success)
+ * - On more revent HW revisions (around AK), the touchpad model changed and is now
+ *   using a different protocol. */
+
+static int (*touchpad_read_real)(unsigned char, unsigned char, char*) = 0;
+static int (*touchpad_write_real)(unsigned char, unsigned char, char*) = 0;
+
+static int touchpad_read_compat_synaptics(unsigned char first, unsigned char last, char *buf)
+{
+    return !touchpad_read_real(first, last, buf);
+}
+
+static int touchpad_write_compat_synaptics(unsigned char first, unsigned char last, char *buf)
+{
+    return !touchpad_write_real(first, last, buf);
+}
+
+static int8_t clamp_to_int8(int val)
+{
+	if(val < SCHAR_MIN)
+		return SCHAR_MIN;
+	if(val > SCHAR_MAX)
+		return SCHAR_MAX;
+
+	return val;
+}
+
+static int bswap16(short s)
+{
+        return ((s & 0xFF) << 8) | ((s & 0xFF00) >> 8);
+}
+
+static int touchpad_read_compat_captivate(unsigned char first, unsigned char last, char *buf)
+{
+    // libndls' touchpad_getinfo, also works for nespire
+    if(first == 0x04 && last == 0x07) {
+        uint8_t captivate_info[6];
+        if(touchpad_read_real(0x07, 0x07+sizeof(captivate_info)-1, (char*)&captivate_info))
+            return false;
+
+        buf[0] = captivate_info[3];
+        buf[1] = captivate_info[2];
+        buf[2] = captivate_info[5];
+        buf[3] = captivate_info[4];
+        return true;
+    }
+
+    // libndls' touchpad_scan (0x0-0xA) and nespire (0x2-0xA)
+    if(first <= last && last == 0x0A) {
+        uint8_t captivate_report[6];
+        if(touchpad_read_real(0x01, 0x01+sizeof(captivate_report)-1, (char*)&captivate_report))
+            return false;
+
+        touchpad_report_t libndls_report = {0};
+        libndls_report.contact = (bool)(captivate_report[1] & 0b10);
+        libndls_report.pressed = (bool)(captivate_report[1] & 0b01);
+        libndls_report.proximity = libndls_report.pressed ? 100 : (libndls_report.contact ? 30 : 0);
+        libndls_report.x = (captivate_report[2] << 8) | captivate_report[3];
+        libndls_report.y = (captivate_report[4] << 8) | captivate_report[5];
+
+        // Calculate relative values
+        static touchpad_report_t report_last = {0};
+        if(libndls_report.contact && report_last.contact) {
+            libndls_report.x_velocity = clamp_to_int8(bswap16(libndls_report.x) - bswap16(report_last.x));
+            libndls_report.y_velocity = clamp_to_int8(bswap16(libndls_report.y) - bswap16(report_last.y));
+        }
+        // The reference is the last time they're read, which is every time this function is called
+        report_last = libndls_report;
+
+        memcpy(buf, (char*)(&libndls_report) + first, last-first+1);
+        return true;
+    }
+
+    return false;
+}
+
+static int touchpad_write_compat_captivate(unsigned char first, unsigned char last, char *buf)
+{
+    // Only page switching is expected
+    return first == 0xFF && last == 0xFF && (buf[0] == 0x4 || buf[0] == 0x10);
+}
+
+#define FIRST_CXII_OSID 34
+typedef uint32_t (*manuf_hwflags_func)(void);
+/* OS-specific: Function which returns HW flags (field 5400) */
+static uintptr_t manuf_hwflags_ptr[NDLESS_MAX_OSID-FIRST_CXII_OSID+1] = {
+    0x100114A8, 0x100114A8, 0x100114A8,
+    0x0, 0x0,
+    0x100114E8, 0x100114E8, 0x100114E8,
+};
+
+static bool has_captivate()
+{
+    // Bit 0 of field 5400 in the manuf
+    return ((manuf_hwflags_func)manuf_hwflags_ptr[ut_os_version_index - FIRST_CXII_OSID])() & 0b1;
+}
+
+void sc_install_compat(void) {
+    if(nl_is_cx2()) {
+        // keypad_type was part of the old manuf driver, which does not exist anymore.
+        static int keypad_type_compat = 4;
+        sc_addrs_ptr[e_keypad_type] = (uintptr_t)&keypad_type_compat;
+
+        touchpad_read_real = (typeof(touchpad_read_real)) sc_addrs_ptr[e_touchpad_read];
+        touchpad_write_real = (typeof(touchpad_write_real)) sc_addrs_ptr[e_touchpad_write];
+
+        if(has_captivate()) {
+            sc_addrs_ptr[e_touchpad_read] = (uintptr_t)&touchpad_read_compat_captivate;
+            sc_addrs_ptr[e_touchpad_write] = (uintptr_t)&touchpad_write_compat_captivate;
+        } else {
+            sc_addrs_ptr[e_touchpad_read] = (uintptr_t)&touchpad_read_compat_synaptics;
+            sc_addrs_ptr[e_touchpad_write] = (uintptr_t)&touchpad_write_compat_synaptics;
+        }
+    }
+}

@@ -46,9 +46,8 @@ void __attribute__ ((noreturn)) ut_calc_reboot(void) {
  * May be used for OS-specific arrays of constants (marked with "// OS-specific"). */
 void ut_read_os_version_index(void) {
 	switch (*(unsigned*)(0x10000020)) {
-#ifndef NDLESS_39
 		// OS-specific
-#ifndef NDLESS_36
+#ifndef STAGE1
 		case 0x102F0FA0: // 3.1.0 non-CAS
 			ut_os_version_index = 0;
 			break;
@@ -68,6 +67,7 @@ void ut_read_os_version_index(void) {
 			ut_os_version_index = 5;
 			break;
 #endif
+#if !defined(STAGE1) || defined(NDLESS_36)
 		case 0x10375BB0: // 3.6.0 non-CAS
 			ut_os_version_index = 6;
 			break;
@@ -149,6 +149,52 @@ void ut_read_os_version_index(void) {
 			break;
 		case 0x103B1E60: // 4.5.0.1180 CAS CX
 			ut_os_version_index = 29;
+			break;
+#endif
+#if !defined(STAGE1)
+		case 0x103B27D0: // 4.5.1.12 non-CAS CX
+			ut_os_version_index = 30;
+			break;
+		case 0x103B2EF0: // 4.5.1.12 CAS CX
+			ut_os_version_index = 31;
+			break;
+#endif
+#if !defined(STAGE1)
+		case 0x103B3020: // 4.5.3.14 non-CAS CX
+			ut_os_version_index = 32;
+			break;
+		case 0x103B3740: // 4.5.3.14 CAS CX
+			ut_os_version_index = 33;
+			break;
+#endif
+#if !defined(STAGE1)
+		case 0x1040E4D0: // 5.2.0.771 non-CAS CX II
+			ut_os_version_index = 34;
+			break;
+		case 0x1040EAE0: // 5.2.0.771 non-CAS CX II-T
+			ut_os_version_index = 35;
+			break;
+		case 0x1040F3B0: // 5.2.0.771 CAS CX II
+			ut_os_version_index = 36;
+			break;
+#endif
+#if !defined(STAGE1)
+		case 0x103B3A10: // 4.5.4.48 non-CAS CX
+			ut_os_version_index = 37;
+			break;
+		case 0x103B4130: // 4.5.4.48 CAS CX
+			ut_os_version_index = 38;
+			break;
+#endif
+#if !defined(STAGE1)
+		case 0x10416CC0: // 5.3.0.564 non-CAS CX II
+			ut_os_version_index = 39;
+			break;
+		case 0x10417460: // 5.3.0.564 non-CAS CX II-T
+			ut_os_version_index = 40;
+			break;
+		case 0x10417DA0: // 5.3.0.564 CAS CX II
+			ut_os_version_index = 41;
 			break;
 #endif
 		default:

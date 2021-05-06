@@ -124,9 +124,12 @@ static int cfg_locate_cfg_file(char *dst_path, size_t dst_path_size) {
 }
 
 void cfg_open(void) {
-	char path[300];
-	if (cfg_locate_cfg_file(path, sizeof(path)))
-		return;
+	static char path[300] = "";
+	struct stat statbuf;
+	if (path[0] == '\0' || stat(path, &statbuf) != 0)
+		if (cfg_locate_cfg_file(path, sizeof(path)))
+			return;
+
 	cfg_open_file(path);
 }
 
@@ -169,6 +172,7 @@ void cfg_register_fileext_file(const char *filepath, const char *ext, const char
 // ext without leading '.'
 void cfg_register_fileext(const char *ext, const char *prgm) {
 	char path[300];
-	if (!cfg_locate_cfg_file(path, sizeof(path)))
-		cfg_register_fileext_file(path, ext, prgm);
+	if (cfg_locate_cfg_file(path, sizeof(path)))
+		snprintf(path, sizeof(path), "%s%s", get_documents_dir(), "ndless/ndless.cfg.tns");
+	cfg_register_fileext_file(path, ext, prgm);
 }

@@ -4,9 +4,12 @@
 #include "lcd_compat.h"
 #include "ndless.h"
 
-/* This compatibility mode works by unmapping the LCD contoller from 0xC0000000,
- * thus causing a data abort on access. Access to the LCD controller's framebuffer address are emulated.
- * The abort handler also installs a 30 Hz FIQ timer, which blits the framebuffer in the correct way. */
+/* This compatibility mode works by configuring the LCD controller to use a 320x320 framebuffer and
+ * configuring the panel controller to display it as 320x240 on a 240x320 panel. To avoid that an
+ * application overwrites the LCD controller timing, the LCD contoller is unmapped from 0xC0000000,
+ * thus causing a data abort on access.
+ * Additionally, on entry the framebuffer is swapped with a plain 320x240 version with the last frame
+ * from the OS. */
 
 // OS-specific: Location of the pointer used by the OS to implement 240x320 lcd support
 static uint32_t lcd_mirror_ptr[NDLESS_MAX_OSID+1] = {0, 0, 0, 0, 0, 0,
@@ -18,69 +21,20 @@ static uint32_t lcd_mirror_ptr[NDLESS_MAX_OSID+1] = {0, 0, 0, 0, 0, 0,
                                                      0x110ED6D4, 0x111516D4,
 						     0x110FD6DC, 0x111616DC,
 						     0x113356DC, 0x113996DC,
-						     0x113496E4, 0x113B16E4};
+						     0x113496E4, 0x113B16E4,
+						     0x1134D6E4, 0x113B16E4,
+						     0x1134D6E4, 0x113B16E4,
+						     0x0, 0x0, 0x0,
+						     0x1134D6E4, 0x113B56E4,
+						     0x0, 0x0, 0x0};
 
 static uint32_t *real_lcdc = (uint32_t*) 0xE0000000;
-static uint16_t *lcd_mirror = 0x0, *current_lcd_mirror = 0x0;
-static volatile uint32_t lcd_control = 0;
-
-// Using the watchdog here as the second timer is used by gbc4nspire
-// and the first one does not emit interrupts...
-static volatile uint32_t *watchdog_load = (uint32_t*) 0x90060000,
-                         *watchdog_control = (uint32_t*) 0x90060008,
-                         *watchdog_intclear = (uint32_t*) 0x9006000C,
-                         *watchdog_lock = (uint32_t*) 0x90060C00;
-
-static bool lcd_timer_enabled = false;
-
+static uint32_t saved_lcd_regs[7];
 bool is_hww;
 
 void lcd_compat_load_hwrev()
 {
     is_hww = lcd_mirror_ptr[ut_os_version_index] != 0 && *(uint32_t*)lcd_mirror_ptr[ut_os_version_index] != 0;
-}
-
-// Handler for screen conversion
-static __attribute__ ((interrupt("FIQ"))) void lcd_compat_fiq()
-{
-    // Acknowledge interrupt
-    *watchdog_lock = 0x1ACCE551;
-    *watchdog_intclear = 1;
-
-    // Convert the framebuffer
-    int mode = (lcd_control & 0xE) >> 1;
-    if(mode == 2) // 4bpp
-    {
-        uint8_t *out = (uint8_t*) real_lcdc[4], *in = (uint8_t*) current_lcd_mirror;
-        for (int x = 0; x < 320; x++)
-        {
-            for (int y = 0; y < 240; y += 2)
-                *out++ = (in[y * 320/2 + x/2] & 0xF0) | (in[y * 320/2 + x/2 + 320/2] >> 4);
-            x++;
-            for (int y = 0; y < 240; y += 2)
-                *out++ = (in[y * 320/2 + x/2] << 4) | (in[y * 320/2 + x/2 + 320/2] & 0x0F);
-        }
-    }
-    else if(mode == 3) // 8bpp
-    {
-        uint8_t *out = (uint8_t*) real_lcdc[4], *in = (uint8_t*) current_lcd_mirror;
-        for (int col = 0; col < 240; ++col)
-        {
-            uint8_t *outcol = out + col;
-            for(int row = 0; row < 320; ++row, outcol += 240)
-                *outcol = *in++;
-        }
-    }
-    else // Hopefully 16bpp...
-    {
-        uint16_t *out = (uint16_t*) real_lcdc[4], *in = (uint16_t*) current_lcd_mirror;
-        for (int col = 0; col < 240; ++col)
-        {
-            uint16_t *outcol = out + col;
-            for(int row = 0; row < 320; ++row, outcol += 240)
-                *outcol = *in++;
-        }
-    }
 }
 
 // sp and lr are special, they are banked and thus not easily accessible.
@@ -115,26 +69,7 @@ asm(
 "add sp, sp, #8\n"
 "subs pc, lr, #4");
 
-static void lcd_timer_enable()
-{
-    // Enable timer for conversion
-    *watchdog_lock = 0x1ACCE551;
-    *watchdog_load = 33000000 / 15; // 15 Hz
-    *watchdog_control = 1;
-
-    // Install FIQ handler
-    *(volatile uint32_t*)0x3C = (uint32_t) lcd_compat_fiq;
-
-    // Set first watchdog interrupt as FIQ
-    *(volatile uint32_t*) 0xDC00000C = 1 << 3;
-    // Activate watchdog IRQ
-    *(volatile uint32_t*) 0xDC000010 = 1 << 3;
-
-    // Enable FIQs
-    asm volatile("msr spsr_c, #0x93");
-
-    lcd_timer_enabled = true;
-}
+static void undo_lcdc_remap();
 
 void lcd_compat_abort(uint32_t *regs)
 {
@@ -146,13 +81,8 @@ void lcd_compat_abort(uint32_t *regs)
     if(fault_addr >> 28 != 0xC)
         asm volatile("udf #0"); // Crash!
 
-    // Manual memory translation. Map 0xC0000010 to a custom variable,
-    // but keep the rest.
-    uint32_t *translated_addr = 0;
-    if(fault_addr == 0xC0000010)
-        translated_addr = (uint32_t*) &current_lcd_mirror;
-    else
-        translated_addr = (uint32_t*) (fault_addr - 0xC0000000 + (uintptr_t) real_lcdc);
+    // Manual memory translation: Access real_lcdc if not blacklisted
+    uint32_t *translated_addr = (uint32_t*) (fault_addr - 0xC0000000 + (uintptr_t) real_lcdc);
 
     // Read instruction that caused fault
     uint32_t inst = *(uint32_t*)(regs[13] - 8);
@@ -183,7 +113,7 @@ void lcd_compat_abort(uint32_t *regs)
             asm volatile("bkpt #2");
 
         int rd = (inst >> 12) & 0xF;
-	uint32_t *reg = 0;
+        uint32_t *reg = 0;
         if(rd <= 12) // Not a banked register?
             reg = regs + rd;
         else if(rd == 13)
@@ -195,42 +125,104 @@ void lcd_compat_abort(uint32_t *regs)
 
         if(inst & (1 << 20)) // Load
             *reg = *translated_addr;
-        else if(fault_addr == 0xC0000018) // LCD control (mode etc.)
-            lcd_control = *translated_addr = *reg;
         else if(fault_addr > 0xC000000C) // Don't change the LCD timings
             *translated_addr = *reg;
     }
 
-    if(!lcd_timer_enabled)
-        lcd_timer_enable();
+    /* After triggering the abort this many times, program startup is most
+     * likely complete, so timing registers are likely not touched again
+     * (ignoring the potential restore on exit) so protecting them is no
+     * longer necessary. */
+    static int lcd_abort_counter = 12;
+    if(--lcd_abort_counter == 0)
+    {
+        lcd_abort_counter = 12;
+        undo_lcdc_remap();
+    }
 }
+
+// OS-specific: Function for transferring data to the LCD controller over SPI
+static uint32_t spi_send_ptr[NDLESS_MAX_OSID+1] = {0, 0, 0, 0, 0, 0,
+                                                       0, 0, 0, 0,
+                                                       0, 0, 0, 0,
+                                                       0, 0, 0, 0,
+                                                       0, 0,
+                                                       0, 0,
+                                                       0x100235BC, 0x1002354C,
+                                                       0x10023B14, 0x10023AA4,
+                                                       0x10023BF0, 0x10023B8C,
+                                                       0x10023D08, 0x10023C98,
+                                                       0x10023D2C, 0x10023CC8,
+                                                       0x10023D2C, 0x10023CF8,
+                                                       0x100106F4, 0x100106F4, 0x100106F4,
+                                                       0x100241B4, 0x10024188,
+                                                       0x10010734, 0x10010734, 0x10010734};
+
+static void spi_send(uint8_t cmd, const uint8_t *data, unsigned int data_count)
+{
+    // Different method signatures
+    if(!nl_is_cx2())
+    {
+        void (*os_spi_send)(uint16_t, const uint8_t *, int) = (typeof(os_spi_send))spi_send_ptr[ut_os_version_index];
+        os_spi_send(cmd, data, data_count);
+    }
+    else
+    {
+        void (*os_spi_send)(const uint8_t *) = (typeof(os_spi_send))spi_send_ptr[ut_os_version_index];
+        uint8_t transfer[data_count + 4];
+        transfer[0] = cmd;
+        transfer[1] = data_count;
+        memcpy(transfer + 4, data, data_count);
+        os_spi_send(transfer);
+    }
+}
+
+#define SPI_SEND(cmd, ...) do { \
+    const uint8_t data[] = {__VA_ARGS__}; \
+    spi_send(cmd, data, sizeof(data)); \
+} while(0)
 
 bool lcd_compat_enable()
 {
     // Only needed on HW-W+
-    if(!is_hww)
+    if(!is_hww && !nl_is_cx2())
         return true;
 
     const char *dlg[] = {"DLG", NULL};
-    TCT_Local_Control_Interrupts(-1);
+    int intmask = TCT_Local_Control_Interrupts(-1);
     show_dialog_box2_(0, (const char*) u"Ndless", (const char*) u"Activating compatibility mode.\n"
                                      "This application hasn't been updated\n"
                                      "to work with your hardware.\n"
                                      "You may run into weird issues!", dlg);
-    TCT_Local_Control_Interrupts(-1);
+    TCT_Local_Control_Interrupts(intmask);
     wait_no_key_pressed();
 
-    if(!lcd_mirror)
+    static uint16_t *new_framebuffer = NULL;
+    if(!new_framebuffer)
     {
         // Try to reuse the OS' internal mirror
-        lcd_mirror = lcd_mirror_ptr[ut_os_version_index] == 0 ? NULL : *(uint16_t**)lcd_mirror_ptr[ut_os_version_index];
-        if(!lcd_mirror)
-            lcd_mirror = calloc(sizeof(uint16_t), 320*240);
-        if(!lcd_mirror)
+        new_framebuffer = lcd_mirror_ptr[ut_os_version_index] == 0 ? NULL : *(uint16_t**)lcd_mirror_ptr[ut_os_version_index];
+        if(!new_framebuffer)
+            new_framebuffer = calloc(sizeof(uint16_t), 320*240);
+        if(!new_framebuffer)
             return false;
     }
 
-    current_lcd_mirror = lcd_mirror;
+    volatile uint32_t *lcdc = (volatile uint32_t*) 0xC0000000;
+    for(unsigned int i = 0; i < sizeof(saved_lcd_regs)/sizeof(*saved_lcd_regs); ++i)
+        saved_lcd_regs[i] = lcdc[i];
+
+    SPI_SEND(0xB0, 0x91, 0xF0); // Enable RGB bypass mode
+    SPI_SEND(0x36, 0x28); // Set MADCTL to XY-Swap + BGR panel
+    SPI_SEND(0x2A, 0x00, 0x00, 0x01, 0x3F); // Set column address to (0, 320)
+    SPI_SEND(0x2B, 0x00, 0x00, 0x00, 0xEF); // Set page address to (0, 240)
+
+    *(volatile uint32_t*)0xC0000018 &= ~0x800; // Disable the LCD
+    // Timing params experimentally determined
+    *(volatile uint32_t*)0xC0000000 = 0x1414094C; // Horizontal timing for 320px
+    *(volatile uint32_t*)0xC0000004 = 0x0505093F; // Vertical timing for 320px
+    *(volatile uint32_t*)0xC0000010 = (uint32_t) new_framebuffer;
+    *(volatile uint32_t*)0xC0000018 |= 0x800; // Enable the LCD
 
     // Get address of translation table
     uint32_t *tt_base;
@@ -244,9 +236,6 @@ bool lcd_compat_enable()
     asm volatile("mcr p15, 0, %[base], c8, c7, 1" :: [base] "r" (0xC0000000));
     asm volatile("mcr p15, 0, %[base], c8, c7, 1" :: [base] "r" (real_lcdc));
 
-    // Load current lcd_control value
-    lcd_control = real_lcdc[6];
-
     // Install data abort handler
     void lcd_compat_abort_handler();
     *(volatile uint32_t*)0x30 = (uint32_t) lcd_compat_abort_handler;
@@ -254,11 +243,8 @@ bool lcd_compat_enable()
     return true;
 }
 
-void lcd_compat_disable()
+static void undo_lcdc_remap()
 {
-    if(!is_hww || !lcd_mirror)
-        return;
-
     uint32_t *tt_base;
     asm volatile("mrc p15, 0, %[tt_base], c2, c0, 0" : [tt_base] "=r" (tt_base));
 
@@ -267,18 +253,24 @@ void lcd_compat_disable()
 
     // Flush TLB for 0xC0000000
     asm volatile("mcr p15, 0, %[base], c8, c7, 1" :: [base] "r" (0xC0000000));
+}
 
-    // Reset timers (if used)
-    if(lcd_timer_enabled)
-    {
-        // Set watchdog interrupt as IRQ again
-        *(volatile uint32_t*) 0xDC00000C &= ~(1 << 3);
-        // Deactivate watchdog IRQ
-        *(volatile uint32_t*) 0xDC000014 = 1 << 3;
+void lcd_compat_disable()
+{
+    if(!is_hww && !nl_is_cx2())
+        return;
 
-        *watchdog_lock = 0x1ACCE551;
-        *watchdog_control = 0;
+    // Undo the changes again
+    SPI_SEND(0xB0, 0x11, 0xF0);
+    SPI_SEND(0x36, nl_is_cx2() ? 0x48 : 0x08);
+    SPI_SEND(0x2A, 0x00, 0x00, 0x00, 0xEF);
+    SPI_SEND(0x2B, 0x00, 0x00, 0x01, 0x3F);
 
-        lcd_timer_enabled = false;
-    }
+    undo_lcdc_remap();
+
+    // Restore the LCD params
+    volatile uint32_t *lcdc = (volatile uint32_t*) 0xC0000000;
+    lcdc[6] &= ~0x800; // Disable the LCD, the restoration below will reenable it
+    for(unsigned int i = 0; i < sizeof(saved_lcd_regs)/sizeof(*saved_lcd_regs); ++i)
+        lcdc[i] = saved_lcd_regs[i];
 }

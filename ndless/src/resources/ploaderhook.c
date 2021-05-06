@@ -76,7 +76,7 @@ static int ndless_load(const char *docpath, NUC_FILE *docfile, void **base, int 
 	uint8_t *docptr;
 	if(emu_debug_alloc_ptr)
 	{
-		if(emu_debug_alloc_size < docstat.st_size)
+		if(emu_debug_alloc_size() < docstat.st_size)
 		{
 			puts("ndless_load: emu_debug_alloc_size too small!");
 			docptr = malloc(docstat.st_size);	
@@ -150,7 +150,12 @@ static const uintptr_t tct_current_thread_addrs[NDLESS_MAX_OSID+1] =
                                                 0x1039DAEC, 0x1039E06C,
                                                 0x103A444C, 0x103A49DC,
                                                 0x103AB29C, 0x103AB82C,
-						0x103B2BAC, 0x103B31AC};
+						0x103B2BAC, 0x103B31AC,
+						0x103B3B1C, 0x103B423C,
+						0x103B436C, 0x103B4A8C,
+						0x1040F760, 0x1040FD70, 0x10410640,
+						0x103B4D5C, 0x103B547C,
+						0x10417F50, 0x104186F0, 0x10419030};
 
 /* Expand the stack of the currently running Task by 128K */
 static bool expand_stack()
@@ -191,7 +196,7 @@ static bool expand_stack()
 		page_table[i] = 0;
 	for(unsigned int i = 256 - pages; i < 256; ++i)
 	{
-		page_table[i] = new_stack_aligned | 0b111111111101;
+		page_table[i] = new_stack_aligned | 0b111111111110;
 		new_stack_aligned += 0x1000;
 	}
 
@@ -364,6 +369,14 @@ int ld_exec_with_args(const char *path, int argsn, char *args[], void **resident
 		memcpy(argvptr, args, argsn * sizeof(char*));
 
 	argv[argc] = NULL;
+
+	volatile uint32_t *cursorctrl = (volatile uint32_t*)0xC0000C00;
+	uint32_t saved_cursorctrl = 0;
+	if(is_cx2) {
+		// Disable the LCDC cursor overlay
+		saved_cursorctrl = *cursorctrl;
+		*cursorctrl &= ~1;
+	}
 	
 	if (has_colors) {
 		volatile unsigned *palette = (volatile unsigned*)0xC0000200;
@@ -373,7 +386,7 @@ int ld_exec_with_args(const char *path, int argsn, char *args[], void **resident
 	}
 
         if(!supports_hww)
-		lcd_compat_enable(savedscr);
+		lcd_compat_enable();
 	
 	is_current_prgm_resident = false;
 	clear_cache();
@@ -383,6 +396,9 @@ int ld_exec_with_args(const char *path, int argsn, char *args[], void **resident
 
         if(!supports_hww)
 		lcd_compat_disable();
+
+	if(is_cx2)
+		*cursorctrl = saved_cursorctrl;
 
 	if(savedscr && !plh_noscrredraw)
 		memcpy((void*) REAL_SCREEN_BASE_ADDRESS, savedscr, _scrsize());

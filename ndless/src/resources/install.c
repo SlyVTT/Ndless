@@ -26,7 +26,6 @@
 #include <os.h>
 #include <ngc.h>
 
-#include "calchook.h"
 #include "lcd_compat.h"
 #include "ndless.h"
 
@@ -42,7 +41,12 @@ static unsigned const ploader_hook_addrs[NDLESS_MAX_OSID+1] =
 						0x1000AA64, 0x1000AA60,
 						0x1000AC4C, 0x1000AC48,
 						0x1000ACD0, 0x1000ACD8,
-						0x1000AD90, 0x1000AD8C};
+						0x1000AD90, 0x1000AD8C,
+						0x1000ADAC, 0x1000ADB4,
+						0x1000ADAC, 0x1000ADE4,
+						0x1002612C, 0x10026144, 0x10026164,
+						0x1000B034, 0x1000B074,
+						0x10028168, 0x100282A0, 0x100282F8};
 
 // initialized at load time. Kept in resident program memory, use nl_is_3rd_party_loader to read it.
 static BOOL loaded_by_3rd_party_loader = FALSE;
@@ -61,7 +65,12 @@ static unsigned const end_of_init_addrs[NDLESS_MAX_OSID+1] =
 						0x10012740, 0x100126EC,
 						0x10012C78, 0x10012C24,
 						0x10012D5C, 0x10012D14,
-						0x10012E54, 0x10012E00};
+						0x10012E54, 0x10012E00,
+						0x10012E8C, 0x10012E44,
+						0x0, 0x0,
+						0x0, 0x0, 0x0,
+						0x0, 0x0,
+						0x0, 0x0, 0x0};
 
 // OS-specific
 // get_res_string + 0xC8
@@ -75,7 +84,12 @@ static unsigned const error_msg_patch_addrs[NDLESS_MAX_OSID+1] =
 						0x1011BFB8, 0x1011BE10,
 						0x10120E84, 0x10120CDC,
 						0x10123CC8, 0x10123B14,
-						0x10125670, 0x10125508};
+						0x10125670, 0x10125508,
+						0x10125B58, 0x10125A7C,
+						0x10126084, 0x10125FB4,
+						0x1015CC6C, 0x1015CE10, 0x1015CDFC,
+						0x1012656C, 0x101264F4,
+						0x101600AC, 0x10160354, 0x1016038C};
 
 // OS-specific (only set if the installer document needs to be closed)
 // close_document
@@ -89,7 +103,12 @@ static unsigned const close_document_addrs[NDLESS_MAX_OSID+1] =
 						0x0, 0x0,
 						0x0, 0x0,
 						0x0, 0x0,
-						0x1000b240, 0x1000b23c};
+						0x1000b240, 0x1000b23c,
+						0x0, 0x0,
+						0x1000B278, 0x1000B2B0,
+						0x100265D4, 0x10026614, 0x1002660C,
+						0x1000B4E4, 0x1000B524,
+						0x10028610, 0x10028770, 0x100287A0};
 
 void ins_uninstall(void) {
 	ut_calc_reboot();
@@ -106,7 +125,10 @@ int main(int __attribute__((unused)) argc, char* argv[]) {
 	BOOL installed = FALSE;
 
 	if (!argv[0] || argv[0][0] == 'L') // not opened from the Documents screen
+	{
+		sc_install_compat();
 		ints_setup_handlers();
+	}
 	else
 		installed = TRUE;
 
@@ -142,6 +164,10 @@ int main(int __attribute__((unused)) argc, char* argv[]) {
 			// The next HOOK_INSTALL invocation clears the cache for us
 		}
 
+		// Cache the path to ndless.cfg.tns to keep working even if the virtual root changes
+		cfg_open();
+		cfg_close();
+
 		if(ut_os_version_index < 6)
 			HOOK_INSTALL(ploader_hook_addrs[ut_os_version_index], plh_hook_31);
 		else if(ut_os_version_index < 26) // plh_hook_36 works for 3.9, 4.0 and 4.2 as well
@@ -150,14 +176,13 @@ int main(int __attribute__((unused)) argc, char* argv[]) {
 			HOOK_INSTALL(ploader_hook_addrs[ut_os_version_index], plh_hook_44);
 
 		lua_install_hooks();
-		calchook_install();
 	}
 
 	if (argv[0] && argv[0][0] == 'L') { // third-party launcher
 		loaded_by_3rd_party_loader = TRUE;
 		return 0;
 	}
-	
+
 	if (installed) { // ndless_resources.tns run: uninstall
 		if (show_msgbox_2b("Ndless", "Do you really want to uninstall Ndless r" STRINGIFY(NDLESS_REVISION) "?\nThe device will reboot.", "Yes", "No") == 2)
 			return 0;
@@ -194,7 +219,12 @@ const unsigned ins_successmsg_hook_addrs[NDLESS_MAX_OSID+1] =
 					 0x1002F92C, 0x1002F8D4,
 					 0x1002FF24, 0x1002FEC0,
 					 0x1003108C, 0x10031034,
-					 0x100310FC, 0x100310A4};
+					 0x100310FC, 0x100310A4,
+					 0x100311C4, 0x10031164,
+					 0x100311C0, 0x10031198,
+					 0x1004AD6C, 0x1004ADF4, 0x1004ADB4,
+					 0x1003167C, 0x10031660,
+					 0x1004CE70, 0x1004D018, 0x1004D00C};
 
 // OS-specific
 // number of the HOME icon
@@ -208,7 +238,12 @@ const unsigned ins_successmsg_icon[NDLESS_MAX_OSID+1] =
 					 0x171, 0x171,
 					 0x172, 0x172,
 					 0x172, 0x172,
-					 0x172, 0x172};
+					 0x172, 0x172,
+					 0x172, 0x172,
+					 0x172, 0x172,
+					 0x14F, 0x14F, 0x14F,
+					 0x18C, 0x18C,
+					 0x14F, 0x14F, 0x14F};
 
 void ins_install_successmsg_hook(void) {
 	if(ins_successmsg_hook_addrs[ut_os_version_index] == 0)
@@ -220,7 +255,7 @@ void ins_install_successmsg_hook(void) {
 // chained after the startup programs execution
 HOOK_DEFINE(ins_successsuccessmsg_hook) {
 	static bool closed = false;
-	if (!nl_loaded_by_3rd_party_loader() && !closed && close_document_addrs[ut_os_version_index]) {
+	if (!closed && close_document_addrs[ut_os_version_index] && !ins_loaded_by_3rd_party_loader()) {
 		// To not close more than necessary and prevent recursion
 		closed = true;
 		((void(*)())close_document_addrs[ut_os_version_index])();
@@ -232,6 +267,13 @@ HOOK_DEFINE(ins_successsuccessmsg_hook) {
 		gui_gc_setColor(gc, has_colors ? 0x32cd32 : 0x505050);
 		gui_gc_setFont(gc, SerifRegular9);
 		gui_gc_drawString(gc, (char*) u"Ndless installed!", 25, 4, GC_SM_TOP);
+
+		static int i = 6;
+		if (!i--) {
+			HOOK_UNINSTALL(ins_successmsg_hook_addrs[ut_os_version_index], ins_successsuccessmsg_hook);
+			clear_cache();
+		}
 	}
+
 	HOOK_RESTORE_RETURN(ins_successsuccessmsg_hook);
 }

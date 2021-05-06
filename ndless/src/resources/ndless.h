@@ -49,7 +49,7 @@ extern "C" {
 
 /* emu.c */
 extern void *emu_debug_alloc_ptr;
-static const size_t emu_debug_alloc_size = 8 * 1024 * 1024; //8MB
+extern size_t emu_debug_alloc_size();
 extern unsigned emu_sysc_table[];
 
 /* install.c */
@@ -116,7 +116,8 @@ extern unsigned int syscall_addrs[NDLESS_MAX_OSID+1][__SYSCALLS_LAST+1];
 
 /* syscalls.c */
 void sc_ext_relocdatab(unsigned *dataptr, unsigned size, void *base);
-void sc_setup(void);
+void sc_install_compat(void);
+BOOL nl_is_cx2(void);
 
 /* luaext.c */
 void lua_install_hooks(void);

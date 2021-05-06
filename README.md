@@ -1,5 +1,5 @@
-Ndless v4.5 r2012 for TI-Nspire OS v4.5.0.1180
-==============================================
+Ndless r2018 for TI-Nspire OS <= v5.3.0.564
+===========================================
 
 Installing Ndless on your calculator makes it possible to run assembly programs.
 
@@ -29,6 +29,26 @@ For more in-depth info, visit the wiki:
 
 Quick guide
 ===========
+
+OS 5.2.0.771 + 5.3.0.564 <img src="https://i.imgur.com/kozAxpP.png" align="right">
+--------
+
+Prerequisites: OS 5.2.0.771 or 5.3.0.564 on CX II, CX II-T or CX II CAS
+
+* Transfer ndless_installer_5.2.0-5.3.0.tns into a folder named "ndless" (top-level)
+* Transfer ndless_resources.tns into the same folder
+* Open the installer and wait
+* Have fun!
+
+OS 4.5.3.14 + 4.5.4.48 <img src="https://i.imgur.com/uuO3ue9.png" align="right">
+--------
+
+Prerequisites: OS 4.5.3.14 or 4.5.4.48 on CX or CX CAS
+
+* Transfer ndless_installer_4.5.3-4.5.4.tns into a folder named "ndless" (top-level)
+* Transfer ndless_resources.tns into the same folder
+* Open the installer and wait
+* Have fun!
 
 OS 4.5.0 <img src="https://i.imgur.com/ZdWgSCq.png" align="right">
 --------
@@ -102,7 +122,7 @@ For CX and CX CAS please install 3.9.1.
 OS 3.6 <img src="http://www.mirari.fr/NwM1" align="right">
 ------
 
-Prerequisites: OS 3.6 
+Prerequisites: OS 3.6
 
 * Transfer ndless_installer.tns and ndless_resources.tns into a folder named "ndless" (top-level)
 * Open the installer
